@@ -6,19 +6,25 @@ import argparse
 
 
 def build_parser() -> argparse.ArgumentParser:
-    from aistudio_api.config import settings
-
     parser = argparse.ArgumentParser(description="AI Studio API entrypoint")
     subparsers = parser.add_subparsers(dest="command")
 
     server_parser = subparsers.add_parser("server", help="启动 Gemini 兼容 API 服务")
-    server_parser.add_argument("--port", type=int, default=settings.port)
+    server_parser.add_argument("--port", type=int)
+    subparsers.add_parser(
+        "browser-server", help="启动仅绑定本机的临时聊天页接单服务（8090）"
+    )
     return parser
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if args.command == "browser-server":
+        from aistudio_api.api.browser_relay import serve
+
+        serve()
+        return
 
     import sys
 

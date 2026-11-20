@@ -1,6 +1,7 @@
 api_keys: []
 waa:
   active_server: local_spidermonkey
+  allow_remote_fallback: false
   servers:
   - id: local_spidermonkey
     name: 本地 Go 签名服务 (SpiderMonkey 152)

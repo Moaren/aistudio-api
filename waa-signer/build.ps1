@@ -335,6 +335,20 @@ $LibPath = "$DepsDir\lib" -replace '\\', '/'
 $env:CGO_CXXFLAGS = "-I$IncludePath"
 $env:CGO_LDFLAGS = "-L$LibPath"
 
+if ($CC.StartsWith("zig ")) {
+    # The prebuilt SpiderMonkey ICU library imports this legacy MSVCRT symbol.
+    # Zig links UCRT, so import the single missing function from Windows MSVCRT.
+    $MsvcrtDefinition = Join-Path $DepsDir "spidermonkey-msvcrt.def"
+    $MsvcrtLibrary = Join-Path "$DepsDir\lib" "libspidermonkey-msvcrt.a"
+    @("LIBRARY msvcrt.dll", "EXPORTS", "  _vsnwprintf") |
+        Set-Content -LiteralPath $MsvcrtDefinition -Encoding Ascii
+    & zig dlltool -m i386:x86-64 -d $MsvcrtDefinition -l $MsvcrtLibrary
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create the SpiderMonkey MSVCRT import library."
+    }
+    $env:CGO_LDFLAGS += " '$($MsvcrtLibrary -replace '\\', '/')'"
+}
+
 $ldflags = "-s -w"
 if (-not [string]::IsNullOrWhiteSpace($ExtLdFlags)) {
     $ldflags += " -extldflags `"$ExtLdFlags`""

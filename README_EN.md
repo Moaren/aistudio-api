@@ -18,6 +18,12 @@
   <a href="./README.md">中文文档</a>
 </p>
 
+### Serve SillyTavern from a Chrome temporary chat
+
+Run `uv run --no-sync python main.py browser-server` from the checkout. Install the [local Tampermonkey script](http://127.0.0.1:8090/aistudio-browser.user.js). Open a dedicated empty AI Studio temporary chat for the intended account, for example [account u/1](https://aistudio.google.com/u/1/prompts/new_chat?temporary=true). Keep Run settings open, select the model, then expand the draggable relay button on the right and enter the tab pairing key printed in the terminal. In SillyTavern choose Google AI Studio, set the reverse proxy to `http://127.0.0.1:8090`, and enter the separate client key as the proxy password.
+
+The relay hosts one tab and one plain-text request at a time, with streaming and cancellation. It sends conversation and system instructions as labelled text and uses the page’s generation settings. It returns rendered text. Image inputs, client-side tools and token counting are unsupported. An idle page can reload once before dispatch to recover or clear the previous conversation. Interrupted submissions report an error. Resume login on the Google page if requested. For stable keys across restarts set distinct random `AISTUDIO_BROWSER_API_KEY` and `AISTUDIO_BROWSER_PAIR_KEY` environment variables. Pair again after closing the tab.
+
 ---
 
 ## Table of Contents
@@ -279,7 +285,7 @@ Open `http://localhost:8080` in your browser to access the Web Console.
 | `AISTUDIO_CONFIG_FILE` | string | `config.yaml` | Path to model rules and default tools configuration YAML |
 | `AISTUDIO_PERSIST_STATS` | bool | `true` | Persist request and token usage metrics across service restarts |
 | `AISTUDIO_PERSIST_ROTATOR` | bool | `true` | Persist account 429 rate limit dates & cooldowns across restarts |
-| `AISTUDIO_PROOF_SERVER_URL` | string | `https://waa.spinsnow.fun` | Fallback proof server URL; active signer & bound User-Agent are primarily configured in `config.yaml` (`waa.active_server`, falling back to `remote_spinsnow` if local binary is absent) |
+| `AISTUDIO_PROOF_SERVER_URL` | string | `https://waa.spinsnow.fun` | Fallback proof server URL. The active signer is selected in `config.yaml` via `waa.active_server`. Set `waa.allow_remote_fallback: false` to stop startup when the local signer is unavailable. |
 | `AISTUDIO_DEFAULT_TEXT_MODEL` | string | `gemini-3.7-flash` | Default text model |
 | `AISTUDIO_TIMEZONE` | string | Auto | Wire protocol timezone (`America/Los_Angeles` by default) |
 | `AISTUDIO_DUMP_REQUESTS` | bool | `false` | Dump API request/response exchanges to console logs (enabled via `DEBUG=1`) |

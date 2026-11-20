@@ -18,6 +18,16 @@
   <a href="./README_EN.md">English Documentation</a>
 </p>
 
+### 用 Chrome 临时聊天页给酒馆接单（可选）
+
+1. 在项目目录运行 `uv run --no-sync python main.py browser-server`。终端会显示酒馆密码和标签页配对码。服务监听 `127.0.0.1:8090`，可以和 8080 共存。
+2. 在装有 Tampermonkey 的 Chrome 打开 [本机接单脚本](http://127.0.0.1:8090/aistudio-browser.user.js) 并安装。在目标账号单独打开空白临时页，例如 [u/1 的临时页](https://aistudio.google.com/u/1/prompts/new_chat?temporary=true)。保持运行设置面板展开，选好模型。点页面右侧的「接单」悬浮球，再点「配对此页」。悬浮球可拖动，同一标签页刷新后保留位置。接着，填入终端的标签页配对码。连接状态和模型会显示在这里。需要登录时，在网页完成登录并回到该账号的临时页。
+3. 酒馆选择 Google AI Studio，反代地址填 `http://127.0.0.1:8090`，代理密码填终端的酒馆密码，重新连接并选择列表中的网页当前模型。首次接单及临时页恢复后都会检查模型是否匹配。
+
+支持单标签页、单个进行中的请求、普通或流式文字回复。多轮历史和系统指令以带角色的文本送入网页，采样、思考和安全设置以网页为准。图片、客户端工具调用和精确 token 计数暂不支持。输出来自渲染后的正文，Markdown 格式可能与网页原文不同。
+
+页签保持打开即可。连接中断会自动重连；空闲临时页需要恢复或包含上次请求的历史时，在下次接单前最多重开一次。请将此页专用于接单。提交后中断会报错，由客户端决定是否重试。暂停接单可使用油猴菜单。默认每次服务启动生成新密钥；要跨重启沿用配对，在启动环境里分别设置不同的随机值 `AISTUDIO_BROWSER_API_KEY` 和 `AISTUDIO_BROWSER_PAIR_KEY`。接单脚本使用油猴的标签页存储保留配对，关闭标签页后需重新配对。
+
 ---
 
 ## 目录
@@ -280,7 +290,7 @@ docker compose up -d
 | `AISTUDIO_CONFIG_FILE` | string | `config.yaml` | 模型规则与默认工具配置文件路径 |
 | `AISTUDIO_PERSIST_STATS` | bool | `true` | 是否持久化模型调用与 Token 统计（1=开启，0=关闭） |
 | `AISTUDIO_PERSIST_ROTATOR` | bool | `true` | 是否持久化账号 429 冷却与调度状态（1=开启，0=关闭） |
-| `AISTUDIO_PROOF_SERVER_URL` | string | `https://waa.spinsnow.fun` | 签名服务兜底地址；默认优先使用 `config.yaml` 中 `waa.active_server` 指定的节点及其绑定的特征 User-Agent（无本地二进制时自动切换为 `remote_spinsnow`） |
+| `AISTUDIO_PROOF_SERVER_URL` | string | `https://waa.spinsnow.fun` | 签名服务兜底地址，优先使用 `config.yaml` 中 `waa.active_server` 指定的节点。设置 `waa.allow_remote_fallback: false` 后，本地签名器不可用会导致启动失败。 |
 | `AISTUDIO_DEFAULT_TEXT_MODEL` | string | `gemini-3.7-flash` | 默认文本模型 |
 | `AISTUDIO_TIMEZONE` | string | 自动探测 | Wire 协议交互时区（默认 `America/Los_Angeles`） |
 | `AISTUDIO_DUMP_REQUESTS` | bool | `false` | 是否在终端转储每次 API 交互报文详情（支持 `DEBUG=1` 触发） |

@@ -895,6 +895,20 @@ class AccountRotator:
         logger.info("清除账号冷却: account=%s, model=%s", account_id, model)
         self.save_state()
 
+    def restore_verified_session(self, account_id: str, expired_at: float) -> None:
+        """清除已确认恢复的登录隔离，保留模型限流状态。"""
+        stats = self._stats.get(account_id)
+        if (
+            not stats
+            or not stats.session_expired
+            or stats.last_session_expired != expired_at
+        ):
+            return
+        stats.session_expired = False
+        stats.last_session_expired = 0.0
+        logger.info("账号登录态复核通过，恢复调度: account=%s", account_id)
+        self.save_state()
+
     def clear_all_cooldowns(self) -> None:
         """清除全部账号的所有模型 429 锁定。"""
         for stats in self._stats.values():

@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -89,15 +90,16 @@ class RemoteProofSigner:
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or lazily initialize shared HTTP client with connection pooling."""
         if self._client is None or self._client.is_closed:
-            is_local = (
-                "127.0.0.1" in self.server_url
-                or "localhost" in self.server_url
-                or "::1" in self.server_url
+            is_local = urlsplit(self.server_url).hostname in (
+                "127.0.0.1",
+                "localhost",
+                "::1",
             )
             effective_proxy = None if is_local else self.proxy_url
             self._client = httpx.AsyncClient(
                 timeout=self.timeout,
                 proxy=effective_proxy,
+                trust_env=not is_local,
                 limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
             )
         return self._client

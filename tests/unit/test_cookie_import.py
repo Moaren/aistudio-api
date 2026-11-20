@@ -4,6 +4,7 @@ from aistudio_api.infrastructure.account.cookie_parser import (
     build_makersuite_headers,
     filter_minimal_cookies,
     parse_cookie_string,
+    probe_aistudio_session,
 )
 
 
@@ -12,6 +13,38 @@ def test_parse_cookie_string_skips_host_only_cookies():
     cookies = state.get("cookies")
     assert isinstance(cookies, list)
     assert cookies == [{"name": "SID", "value": "sid123"}]
+
+
+@pytest.mark.parametrize(
+    "status,location,body,expected",
+    [
+        (200, "", '<script>{"WIu0Nc": "public-placeholder"}</script>', (True, "ok")),
+        (200, "", "<html>Generic page</html>", (True, "unconfirmed_page")),
+        (302, "/u/2/welcome", "", (False, "signed_out")),
+        (302, "/prompts?continue=https://accounts.google.com/", "", (True, "redirect")),
+        (429, "", "", (True, "http_429")),
+    ],
+)
+async def test_probe_uses_the_requested_account_and_requires_a_confirmed_page(
+    status, location, body, expected
+):
+    import httpx
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == (
+            "https://aistudio.google.com/u/2/prompts/new_chat?temporary=true"
+        )
+        return httpx.Response(status, headers={"location": location}, text=body)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handle), follow_redirects=True
+    ) as client:
+        assert (
+            await probe_aistudio_session(
+                {"SID": "synthetic"}, auth_user="2", client=client
+            )
+            == expected
+        )
 
 
 def test_filter_minimal_cookies_and_makersuite_headers():

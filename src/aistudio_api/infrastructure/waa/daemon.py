@@ -21,6 +21,7 @@ from pathlib import Path
 
 from aistudio_api.infrastructure.gateway.model_defaults import (
     get_active_waa_server,
+    get_configured_waa_settings,
     switch_active_waa_server,
 )
 from aistudio_api.infrastructure.utils.logger import get_logger
@@ -165,12 +166,19 @@ def ensure_signer_ready() -> None:
         except Exception as e:
             logger.warning("启动本地 WAA 签名服务失败: %s", e)
 
-    # 3. 若无本地二进制或拉起失败，回退到远程签名节点并给予明确操作引导
     build_cmd = (
         ".\\waa-signer\\build.bat (或 .\\waa-signer\\build.ps1)"
         if sys.platform == "win32"
         else "bash waa-signer/build.sh"
     )
+    stop_signer_daemon()
+    if get_configured_waa_settings().get("allow_remote_fallback") is False:
+        raise RuntimeError(
+            f"本地 WAA 签名服务不可用，已禁止远程回退：{bin_path}。"
+            f"请检查本机 8081 端口或运行 {build_cmd}。"
+        )
+
+    # 3. 若无本地二进制或拉起失败，回退到远程签名节点并给予明确操作引导
     logger.warning(
         "未检测到本地 WAA 签名服务二进制产物: %s\n"
         "  ==> 当前已自动降级回退至远程签名节点 (remote_spinsnow)。\n"

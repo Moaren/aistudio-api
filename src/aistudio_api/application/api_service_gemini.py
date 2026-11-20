@@ -552,7 +552,9 @@ async def handle_attempt_exception(
                 cdict = load_cookies_from_auth_file(auth_path) if auth_path else {}
                 before_ts = cdict.get("__Secure-1PSIDTS", "")
                 if cdict:
-                    alive, _ = await probe_aistudio_session(cdict)
+                    alive, _ = await probe_aistudio_session(
+                        cdict, auth_user=active_acc.auth_user
+                    )
                     if not _is_request_generation_current(request_ctx):
                         return True
                     if alive and hasattr(account_svc, "rotate_account_cookies"):

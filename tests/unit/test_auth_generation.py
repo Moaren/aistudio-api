@@ -202,15 +202,25 @@ async def test_auth_failure_is_attributed_to_its_request_context(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rotation_status", [401, 200])
-async def test_old_background_probe_cannot_expire_new_generation(
-    monkeypatch, rotation_status
+@pytest.mark.parametrize(
+    "rotation_status,recovering,probe_result,replaced",
+    [
+        (401, False, (False, "signed_out"), True),
+        (200, False, (False, "signed_out"), True),
+        (0, True, (True, "ok"), False),
+        (0, True, (True, "ok"), True),
+        (0, True, (True, "http_429"), False),
+    ],
+)
+async def test_background_probe_only_applies_confirmed_current_session_state(
+    monkeypatch, rotation_status, recovering, probe_result, replaced
 ):
     from aistudio_api.application import account_rotator, account_service
     from aistudio_api.infrastructure.account import account_store, cookie_parser
     from aistudio_api.infrastructure.waa import daemon
 
     account = _account("acc_a", "cookie_old")
+    account.auth_user = "2"
     cookies = {"SID": "synthetic_sid", "__Secure-1PSIDTS": "synthetic_ts"}
     store = MagicMock()
     store.list_accounts.return_value = [account]
@@ -223,7 +233,10 @@ async def test_old_background_probe_cannot_expire_new_generation(
         "cookies": cookies,
     }
     rotator = MagicMock()
-    rotator.get_account_stats.return_value = SimpleNamespace(session_expired=False)
+    expired_at = time.time() - 16 * 60
+    rotator.get_account_stats.return_value = SimpleNamespace(
+        session_expired=recovering, last_session_expired=expired_at
+    )
     client = MagicMock()
     client.close = AsyncMock()
     probe_started = asyncio.Event()
@@ -233,10 +246,11 @@ async def test_old_background_probe_cannot_expire_new_generation(
     tasks: list[asyncio.Task[object]] = []
     original_create_task = asyncio.create_task
 
-    async def probe(*_args, **_kwargs):
+    async def probe(*_args, auth_user, **_kwargs):
+        assert auth_user == "2"
         probe_started.set()
         await finish_probe.wait()
-        return False, "signed_out"
+        return probe_result
 
     async def controlled_sleep(delay):
         if delay == 5.0:
@@ -275,11 +289,20 @@ async def test_old_background_probe_cannot_expire_new_generation(
     try:
         async with app_module.lifespan(app_module.app):
             await asyncio.wait_for(probe_started.wait(), timeout=2.0)
-            # 旧探活尚未结束时模拟重新导入，确保结果携带旧代际。
-            account.cookie_id = "cookie_new"
+            if replaced:
+                # 旧探活尚未结束时模拟重新导入，确保结果携带旧代际。
+                account.cookie_id = "cookie_new"
             finish_probe.set()
             await asyncio.wait_for(cycle_finished.wait(), timeout=2.0)
             rotator.record_session_expired.assert_not_called()
+            if recovering:
+                service.rotate_account_cookies.assert_not_awaited()
+            if recovering and probe_result[1] == "ok" and not replaced:
+                rotator.restore_verified_session.assert_called_once_with(
+                    account.id, expired_at
+                )
+            else:
+                rotator.restore_verified_session.assert_not_called()
     finally:
         for task in tasks:
             task.cancel()

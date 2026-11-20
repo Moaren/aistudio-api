@@ -9,6 +9,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urljoin, urlsplit
 
 if TYPE_CHECKING:
     import httpx
@@ -601,16 +602,21 @@ async def probe_account_benefit_tier(
 async def probe_aistudio_session(
     raw_or_dict: object,
     *,
+    auth_user: str | None = None,
     client: httpx.AsyncClient | None = None,
     user_agent: str | None = None,
 ) -> tuple[bool, str]:
     """探测 AI Studio 登录会话是否仍然存活。
 
-    访问 https://aistudio.google.com/（不跟随重定向）：
-    - 200 OK：会话存活 -> (True, "ok")
-    - 302 跳转至 /welcome 或 ServiceLogin：会话已登出/失效 -> (False, "signed_out")
-    - 其他状态或网络抖动：默认视为存活，避免误杀有效凭据。
+    指定 auth_user 时检查对应 Playground 页面，且仅在页面含启动数据时确认登录。
+    调用方可用 reason == "ok" 区分确认登录和暂时无法确认的结果。
     """
+    if auth_user is not None and not re.fullmatch(r"[0-9]+", auth_user):
+        return True, "invalid_auth_user"
+    target = f"{DEFAULT_ORIGIN}/"
+    if auth_user is not None:
+        target = f"{DEFAULT_ORIGIN}/u/{auth_user}/prompts/new_chat?temporary=true"
+
     cookie_dict = (
         raw_or_dict
         if isinstance(raw_or_dict, dict)
@@ -633,18 +639,23 @@ async def probe_aistudio_session(
 
     async def _do_probe(http_client: httpx.AsyncClient) -> tuple[bool, str]:
         resp = await http_client.get(
-            "https://aistudio.google.com/",
+            target,
             headers=headers,
             follow_redirects=False,
         )
         if 300 <= resp.status_code < 400:
-            loc = resp.headers.get("location") or ""
-            if re.search(
-                r"/welcome\b|ServiceLogin|accounts\.google\.com", loc, re.IGNORECASE
+            loc = urlsplit(urljoin(target, resp.headers.get("location") or ""))
+            if loc.hostname == "accounts.google.com" or (
+                loc.hostname == "aistudio.google.com"
+                and re.match(r"(?:/u/[0-9]+)?/welcome(?:/|$)", loc.path, re.IGNORECASE)
             ):
                 return False, "signed_out"
             return True, "redirect"
         if resp.status_code == 200:
+            if auth_user is not None and not re.search(
+                r'"WIu0Nc"\s*:\s*"[^"]+"', resp.text
+            ):
+                return True, "unconfirmed_page"
             return True, "ok"
         return True, f"http_{resp.status_code}"
 

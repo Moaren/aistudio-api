@@ -188,6 +188,7 @@ async def lifespan(_app: FastAPI):
             probe_aistudio_session,
         )
 
+        rechecked_expirations: dict[str, float] = {}
         await asyncio.sleep(5.0)
         while True:
             try:
@@ -201,10 +202,22 @@ async def lifespan(_app: FastAPI):
                         if not acc.enabled:
                             continue
                         st = rotator.get_account_stats(acc.id)
-                        if st and st.session_expired:
+                        expired_at = (
+                            st.last_session_expired
+                            if st and st.session_expired
+                            else None
+                        )
+                        if expired_at is not None and (
+                            now_ts - expired_at < 15 * 60
+                            or rechecked_expirations.get(acc.id) == expired_at
+                        ):
                             continue
                         last_rot = acc.last_rotated_at or 0.0
-                        if last_rot and (now_ts - last_rot < 420.0):
+                        if (
+                            expired_at is None
+                            and last_rot
+                            and now_ts - last_rot < 420.0
+                        ):
                             continue
                         apath = account_store.get_auth_path(acc.id)
                         if not apath:
@@ -212,8 +225,22 @@ async def lifespan(_app: FastAPI):
                         cdict = load_cookies_from_auth_file(apath)
                         if not cdict:
                             continue
-                        # 同源 Cookie 不同导入代际分别轮换，且在异步操作前保存代际。
                         cookie_id = acc.cookie_id or ""
+                        if expired_at is not None:
+                            rechecked_expirations[acc.id] = expired_at
+                            _, reason = await probe_aistudio_session(
+                                cdict, auth_user=acc.auth_user, client=rot_client
+                            )
+                            if (
+                                reason == "ok"
+                                and account_service.is_cookie_generation_current(
+                                    acc.id, cookie_id
+                                )
+                            ):
+                                rotator.restore_verified_session(acc.id, expired_at)
+                            continue
+
+                        # 同源 Cookie 不同导入代际分别轮换，且在异步操作前保存代际。
                         anchor = compute_session_anchor(cdict)
                         if anchor:
                             session_key = (anchor, cookie_id)
@@ -233,7 +260,7 @@ async def lifespan(_app: FastAPI):
                         status_code = rot_res.get("status", 0)
                         if status_code == 401:
                             alive, _ = await probe_aistudio_session(
-                                cdict, client=rot_client
+                                cdict, auth_user=acc.auth_user, client=rot_client
                             )
                             if not account_service.is_cookie_generation_current(
                                 acc.id, cookie_id
@@ -256,6 +283,7 @@ async def lifespan(_app: FastAPI):
                         ):
                             alive, _ = await probe_aistudio_session(
                                 new_cdict if isinstance(new_cdict, dict) else cdict,
+                                auth_user=acc.auth_user,
                                 client=rot_client,
                             )
                             if not account_service.is_cookie_generation_current(
