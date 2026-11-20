@@ -9,7 +9,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
@@ -21,6 +21,7 @@ from starlette.types import Receive, Scope, Send
 PORT = 8090
 LEASE = 90
 SCRIPT = Path(__file__).resolve().parents[3] / "userscripts/aistudio-browser.user.js"
+ModelId = Annotated[str, Field(pattern=r"^[A-Za-z0-9._-]{1,128}$")]
 
 
 class Pulse(BaseModel):
@@ -28,6 +29,7 @@ class Pulse(BaseModel):
     page: UUID
     state: Literal["ready", "loading", "recover", "occupied", "login", "working"]
     model: str = Field(max_length=128, pattern=r"^[A-Za-z0-9._-]*$")
+    models: list[ModelId] | None = Field(default=None, max_length=256)
     job: str = Field(default="", max_length=64)
     event: Literal["", "delta", "done", "error"] = ""
     text: str = Field(default="", max_length=262144)
@@ -55,8 +57,34 @@ class Job:
 
 
 def text_prompt(body: dict[str, object]) -> str:
-    if body.get("tools") or body.get("toolConfig") or body.get("cachedContent"):
-        raise HTTPException(400, "浏览器模式仅支持文本对话")
+    if body.get("cachedContent") or body.get("cached_content"):
+        raise HTTPException(400, "浏览器模式无法载入 API 缓存内容")
+    tools = body.get("tools") or []
+    if not isinstance(tools, list) or not all(
+        isinstance(t, dict)
+        and len(t) == 1
+        and isinstance(
+            t.get("function_declarations", t.get("functionDeclarations")), list
+        )
+        for t in tools
+    ):
+        raise HTTPException(
+            400,
+            "此请求包含网页接单未实现的工具。酒馆联网搜索可在连接设置中关闭，网页搜索由 AI Studio 控制。",
+        )
+    tool_config = body.get("toolConfig", body.get("tool_config")) or {}
+    if not isinstance(tool_config, dict):
+        raise HTTPException(400, "无效的工具配置")
+    calling = tool_config.get(
+        "functionCallingConfig", tool_config.get("function_calling_config", {})
+    )
+    if not isinstance(calling, dict) or calling.get("mode", "AUTO") not in (
+        "AUTO",
+        "NONE",
+    ):
+        raise HTTPException(
+            400, "此请求要求客户端函数调用。请将工具选择设为自动或关闭酒馆函数调用。"
+        )
     config = body.get("generationConfig") or {}
     if not isinstance(config, dict) or (
         config.get("candidateCount", 1) != 1
@@ -69,18 +97,27 @@ def text_prompt(body: dict[str, object]) -> str:
 
     def extract(content: object) -> str:
         parts = content.get("parts") if isinstance(content, dict) else None
-        if (
-            not isinstance(parts, list)
-            or not parts
-            or not all(
-                isinstance(p, dict)
-                and set(p) == {"text"}
-                and isinstance(p["text"], str)
-                for p in parts
+        if not isinstance(parts, list) or not parts:
+            raise HTTPException(400, "消息必须包含 parts")
+        chunks: list[str] = []
+        for part in parts:
+            if isinstance(part, dict):
+                fields = set(part) - {"thoughtSignature", "thought_signature"}
+                if fields == {"text"} and isinstance(part["text"], str):
+                    chunks.append(part["text"])
+                    continue
+                if len(fields) == 1 and fields <= {"functionCall", "functionResponse"}:
+                    key = next(iter(fields))
+                    if isinstance(part[key], dict):
+                        chunks.append(
+                            f"\n[{key}] {json.dumps(part[key], ensure_ascii=False)}\n"
+                        )
+                        continue
+            raise HTTPException(
+                400,
+                "浏览器接单支持文字和历史工具记录；当前消息包含未支持的附件或内容类型",
             )
-        ):
-            raise HTTPException(400, "消息必须包含纯文本 parts")
-        return "".join(p["text"] for p in parts)
+        return "".join(chunks)
 
     turns = body.get("contents")
     if not isinstance(turns, list) or not turns:
@@ -121,6 +158,7 @@ def create_browser_app(api_key: str, pair_key: str) -> FastAPI:
     tab: UUID | None = None
     seen = 0.0
     model = ""
+    available: tuple[str, ...] = ()
     state = "offline"
     current: Job | None = None
 
@@ -151,7 +189,7 @@ def create_browser_app(api_key: str, pair_key: str) -> FastAPI:
 
     @app.post("/browser/pulse")
     async def pulse(p: Pulse, request: Request):
-        nonlocal tab, seen, model, state
+        nonlocal tab, seen, model, state, available
         authorize(request, pair_key)
         now = time.monotonic()
         if tab != p.tab and now - seen < LEASE and tab is not None:
@@ -165,9 +203,15 @@ def create_browser_app(api_key: str, pair_key: str) -> FastAPI:
             j.publish("error", "执行页已断开，本次请求已中断")
         if tab != p.tab:
             model = ""
+            available = ()
         seen, tab, state = now, p.tab, p.state
         if p.model:
             model = p.model
+        available = (
+            tuple(dict.fromkeys(p.models))
+            if p.models is not None
+            else ((model,) if model else ())
+        )
         if p.job:
             if not j or j.terminal or j.id != p.job or j.page != p.page:
                 return {"action": "cancel"}
@@ -183,7 +227,7 @@ def create_browser_app(api_key: str, pair_key: str) -> FastAPI:
         elif state == "recover" and not j.refreshed:
             j.refreshed = True
             return {"action": "refresh"}
-        elif state == "ready" and p.model == j.model:
+        elif state == "ready" and j.model in available:
             j.page = p.page
             return {"action": "run", "job": j.id, "prompt": j.prompt, "model": j.model}
         elif state != "loading":
@@ -194,17 +238,23 @@ def create_browser_app(api_key: str, pair_key: str) -> FastAPI:
     @app.get("/v1beta/models/{name}")
     async def models(request: Request, name: str | None = None):
         authorize(request, api_key)
-        online = bool(tab and time.monotonic() - seen < LEASE and model)
-        descriptor = {
-            "name": f"models/{model}",
-            "displayName": model,
-            "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
-        }
+        online = available if tab and time.monotonic() - seen < LEASE else ()
+
+        def descriptor(mid: str):
+            return {
+                "name": f"models/{mid}",
+                "displayName": mid,
+                "supportedGenerationMethods": [
+                    "generateContent",
+                    "streamGenerateContent",
+                ],
+            }
+
         if name is None:
-            return {"models": [descriptor] if online else []}
-        if not online or name != model:
-            raise HTTPException(404, "请检查专用标签页当前选择的模型")
-        return descriptor
+            return {"models": [descriptor(mid) for mid in online]}
+        if name not in online:
+            raise HTTPException(404, "模型未出现在此账号上报的文字模型列表中")
+        return descriptor(name)
 
     @app.post("/v1beta/models/{name}:{method}")
     async def generate(
@@ -216,8 +266,8 @@ def create_browser_app(api_key: str, pair_key: str) -> FastAPI:
             raise HTTPException(501, "本模式仅支持文本生成")
         if tab is None or time.monotonic() - seen >= LEASE:
             raise HTTPException(503, "请打开并配对 AI Studio 临时聊天页")
-        if name != model:
-            raise HTTPException(404, "请求模型与页面选择不一致")
+        if name not in available:
+            raise HTTPException(404, "请求模型未出现在此账号上报的文字模型列表中")
         if current is not None or state == "working":
             raise HTTPException(409, "浏览器已有任务")
         if state in ("login", "occupied"):

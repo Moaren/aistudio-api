@@ -175,3 +175,36 @@ def test_transcript_preserves_roles_and_refuses_multimodal():
     )
     with pytest.raises(HTTPException):
         text_prompt({"contents": [{"parts": [{"inlineData": {"data": "AA=="}}]}]})
+
+
+@pytest.mark.parametrize("mode", ["AUTO", "NONE"])
+def test_optional_sillytavern_functions_allow_text_reply(mode):
+    body = {
+        **PROMPT,
+        "tools": [{"function_declarations": [{"name": "example"}]}],
+        "toolConfig": {"functionCallingConfig": {"mode": mode}},
+    }
+    assert text_prompt(body) == "hello"
+    body["toolConfig"]["functionCallingConfig"]["mode"] = "ANY"
+    with pytest.raises(HTTPException, match="客户端函数调用"):
+        text_prompt(body)
+    with pytest.raises(HTTPException, match="工具"):
+        text_prompt({**PROMPT, "tools": [{"google_search": {}}]})
+
+
+async def test_model_catalogue_and_legacy_replacement(relay):
+    client, _, pulse = relay
+    await pulse(models=[MODEL, "gemini-alternate", MODEL])
+    url = "/v1beta/models/gemini-alternate"
+    assert len((await client.get("/v1beta/models", headers=API)).json()["models"]) == 2
+    assert (await client.get(url, headers=API)).status_code == 200
+    task = asyncio.create_task(
+        client.post(url + ":generateContent", json=PROMPT, headers=API)
+    )
+    await asyncio.sleep(0)
+    command = await pulse(models=[MODEL, "gemini-alternate"])
+    assert command["model"] == "gemini-alternate"
+    await pulse(job=command["job"], event="done", text="OK", model="gemini-alternate")
+    assert (await task).status_code == 200
+    await pulse()
+    assert (await client.get(url, headers=API)).status_code == 404

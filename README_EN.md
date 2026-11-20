@@ -20,6 +20,8 @@
 
 ### Serve SillyTavern from a Chrome temporary chat
 
+The paired idle tab reads text model IDs from the All, Gemini and Gemma categories. It excludes models marked Paid and specialized non-chat entries. Reconnect SillyTavern to refresh the list. The script selects and verifies the requested model before submitting the prompt. Optional function declarations allow a text-only answer. Forced function calls return an error, and previous function calls and results are included as transcript text.
+
 Run `uv run --no-sync python main.py browser-server` from the checkout. Install the [local Tampermonkey script](http://127.0.0.1:8090/aistudio-browser.user.js). Open a dedicated empty AI Studio temporary chat for the intended account, for example [account u/1](https://aistudio.google.com/u/1/prompts/new_chat?temporary=true). Keep Run settings open, select the model, then expand the draggable relay button on the right and enter the tab pairing key printed in the terminal. In SillyTavern choose Google AI Studio, set the reverse proxy to `http://127.0.0.1:8090`, and enter the separate client key as the proxy password.
 
 The relay hosts one tab and one plain-text request at a time, with streaming and cancellation. It sends conversation and system instructions as labelled text and uses the page’s generation settings. It returns rendered text. Image inputs, client-side tools and token counting are unsupported. An idle page can reload once before dispatch to recover or clear the previous conversation. Interrupted submissions report an error. Resume login on the Google page if requested. For stable keys across restarts set distinct random `AISTUDIO_BROWSER_API_KEY` and `AISTUDIO_BROWSER_PAIR_KEY` environment variables. Pair again after closing the tab.

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         AI Studio 本机临时页接单
-// @version      1.2.0
+// @version      1.3.1
 // @updateURL    none
 // @downloadURL  none
 // @description  将一个明确配对的临时聊天页连接到本机酒馆代理
@@ -38,6 +38,83 @@
     let connection = '尚未连接';
     let renderStatus = () => {};
     const born = Date.now();
+    let catalogue;
+    let scanAfter = 0;
+    const carousel = () => one('mat-dialog-container ms-model-carousel.in-model-selector');
+
+    function choices(menu) {
+        const result = new Map();
+        for (const button of menu.querySelectorAll('ms-model-carousel-row button.content-button')) {
+            const id = button.querySelector('.model-subtitle')?.textContent.trim() || '';
+            if (!visible(button) || button.disabled || button.getAttribute('aria-disabled') === 'true'
+                || button.querySelector('.badge.paid') || !/^(gemini|gemma)-[a-z0-9._-]+$/i.test(id)
+                || /(?:^|-)(?:image|tts|live|transcribe|omni|banana|decision|streaming)(?:-|$)/i.test(id)) continue;
+            result.set(id, button);
+        }
+        return result;
+    }
+
+    async function waitFor(read, ms = 4000) {
+        const end = Date.now() + ms;
+        do {
+            const value = read();
+            if (value) return value;
+            await sleep(100);
+        } while (Date.now() < end);
+        return null;
+    }
+
+    async function inspectMenu(target) {
+        if (!active || status() !== 'ready' || one('mat-dialog-container')) {
+            throw new Error('请先关闭网页弹窗并确认专用页空闲');
+        }
+        one('ms-model-selector button.model-selector-card')?.click();
+        const menu = await waitFor(carousel);
+        if (!menu) throw new Error('未找到网页模型选择器');
+        try {
+            const chips = [...menu.querySelectorAll('button[variant="filter-chip"]')];
+            const all = chips.find(b => /^(All|全部|所有)$/i.test(b.textContent.trim()));
+            const families = chips.filter(b => /^(Gemini|Gemma)$/i.test(b.textContent.trim()));
+            const family = families.find(b => target?.startsWith(b.textContent.trim().toLowerCase() + '-'));
+            const filters = [...new Set(target ? [family, all] : [all, ...families])].filter(Boolean);
+            const found = new Set();
+            let button;
+            // The "All" tab can omit entries present in the Gemini and Gemma categories.
+            for (const filter of filters.length ? filters : [null]) {
+                if (filter) {
+                    filter.click();
+                    await sleep(150);
+                }
+                await waitFor(() => menu.querySelector('ms-model-carousel-row .model-subtitle'), 800);
+                const list = menu.querySelector('.model-options-container');
+                if (list) list.scrollTop = 0;
+                for (let batch = 0; batch < 24; batch++) {
+                    const options = choices(menu);
+                    for (const id of options.keys()) found.add(id);
+                    button = options.get(target);
+                    if (button || !list || !list.clientHeight || list.scrollTop + list.clientHeight >= list.scrollHeight - 1) break;
+                    list.scrollTop += list.clientHeight;
+                    await sleep(70);
+                }
+                if (button) break;
+            }
+            if (!found.size) throw new Error('模型菜单未列出可选的文字模型');
+            if (!target) catalogue = [...found].slice(0, 256);
+            if (target) {
+                if (!button || !active || !temporary() || location.pathname !== pairing.path
+                    || editor()?.value || isStop(runButton())) throw new Error('目标模型不可选或页面已被占用');
+                button.click();
+                if (!await waitFor(() => !carousel() && model() === target)) {
+                    throw new Error('网页未切到所选模型，请检查账号权限和页面提示');
+                }
+            }
+        } finally {
+            if (menu.isConnected) {
+                menu.closest('mat-dialog-container')?.querySelector('button[data-test-close-button]')?.click();
+                await waitFor(() => !carousel());
+            }
+        }
+    }
 
     function status() {
         if (!temporary() || location.pathname !== pairing.path) return 'occupied';
@@ -55,7 +132,7 @@
             GM_xmlhttpRequest({
                 method: 'POST', url: endpoint, anonymous: true, timeout: 5000,
                 headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + pairing.secret},
-                data: JSON.stringify({tab: pairing.tab, page, state, model: model(), ...extra}),
+                data: JSON.stringify({tab: pairing.tab, page, state, model: model(), models: catalogue, ...extra}),
                 onload: response => {
                     try {
                         if (response.status !== 200) throw new Error('本机连接失败 HTTP ' + response.status);
@@ -83,7 +160,7 @@
 
     async function execute(task) {
         const job = task.job;
-        const field = editor();
+        let field;
         let submitted = false;
         let finished = false;
         let emitted = '';
@@ -94,7 +171,15 @@
             sinceLastPulse = Date.now();
         };
         try {
-            if (status() !== 'ready' || model() !== task.model) throw new Error('临时页状态已变化');
+            if (status() !== 'ready') throw new Error('临时页状态已变化');
+            if (model() !== task.model) {
+                await tick();
+                await inspectMenu(task.model);
+            }
+            field = editor();
+            if (!field || status() !== 'ready' || model() !== task.model) {
+                throw new Error('模型切换后输入框或页面状态已变化');
+            }
             write(field, task.prompt);
             for (let i = 0; i < 25 && runButton()?.disabled; i++) await sleep(80);
             await tick();
@@ -160,6 +245,13 @@
         let failures = 0;
         while (active) {
             try {
+                if (status() === 'ready' && !one('mat-dialog-container') && Date.now() >= scanAfter) {
+                    scanAfter = Date.now() + 60000;
+                    try {
+                        await inspectMenu();
+                        scanAfter = Date.now() + 600000;
+                    } catch { /* keep the current model available if the picker changes */ }
+                }
                 const reply = await pulse(status());
                 failures = 0;
                 connection = '已连接';
@@ -209,6 +301,7 @@
             alert('本页接单已暂停。再次配对前请刷新此专用页。');
         }
         GM_registerMenuCommand('查看本页接单状态', () => alert(description()));
+        GM_registerMenuCommand('重新读取网页模型列表', () => { scanAfter = 0; });
         GM_registerMenuCommand('配对此临时页 / 更新配对码', pair);
         GM_registerMenuCommand('暂停本页接单', pause);
         if (temporary()) {
