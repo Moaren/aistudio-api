@@ -779,6 +779,72 @@ async def probe_and_import(
     )
 
 
+class SyncCookiesRequest(BaseModel):
+    cookies: str
+
+
+class SyncCookiesResponse(BaseModel):
+    mode: str  # "updated" 同一登录会话就地覆盖；"imported" 新会话走探活导入
+    account_ids: list[str]
+
+
+@router.post("/sync-cookies", response_model=SyncCookiesResponse)
+async def sync_cookies(
+    req: SyncCookiesRequest,
+    account_service: AccountService = Depends(get_account_service),
+    runtime_state: RuntimeState = Depends(get_runtime_state),
+) -> SyncCookiesResponse:
+    """浏览器扩展推送的实时 Cookie：按会话锚点 (SAPISID) 匹配已有账号就地覆盖，匹配不到才新建。"""
+    import time
+
+    from aistudio_api.infrastructure.account.cookie_parser import (
+        compute_session_anchor,
+        filter_minimal_cookies,
+        parse_raw_cookies,
+    )
+
+    parsed = filter_minimal_cookies(
+        parse_raw_cookies(req.cookies), include_account_host=True
+    )
+    anchor = compute_session_anchor(parsed)
+    if not anchor:
+        raise HTTPException(status_code=400, detail="未解析到有效的 Google 登录 Cookie")
+
+    targets: list[AccountMeta] = []
+    for acc in account_service.list_accounts():
+        apath = account_service.get_account_auth_path(acc.id)
+        if (
+            apath
+            and compute_session_anchor(load_cookies_from_auth_file(apath)) == anchor
+        ):
+            targets.append(acc)
+
+    if not targets:
+        res = await probe_and_import(
+            ProbeAndImportRequest(cookies=req.cookies), account_service, runtime_state
+        )
+        return SyncCookiesResponse(
+            mode="imported", account_ids=[a.id for a in res.accounts]
+        )
+
+    # rotated_at=now 让后台 7 分钟轮换跳过这些账号：浏览器在喂，代理就不要自己 RotateCookies 制造第二条滚动链
+    account_service.update_account_cookies(
+        account_id=targets[0].id, new_cookies=parsed, rotated_at=time.time()
+    )
+    rotator = runtime_state.rotator
+    session = runtime_state.client.session if runtime_state.client else None
+    ctx = session.active_context if session is not None else None
+    for acc in targets:
+        st = rotator.get_account_stats(acc.id) if rotator else None
+        if st is not None and st.session_expired:
+            rotator.restore_verified_session(acc.id, st.last_session_expired)
+        apath = account_service.get_account_auth_path(acc.id)
+        if ctx is not None and apath and str(ctx.auth_file) == str(apath):
+            ctx.cookies.update(parsed)
+    log.info("浏览器 Cookie 同步: 账号数=%d", len(targets))
+    return SyncCookiesResponse(mode="updated", account_ids=[a.id for a in targets])
+
+
 @router.post("/import-bundle", response_model=ImportBundleResponse)
 async def import_bundle(
     req: ImportBundleRequest,

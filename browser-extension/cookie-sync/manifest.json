@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "AI Studio Cookie Sync",
+  "version": "1.0.0",
+  "description": "Google 登录 Cookie 变化时自动推送到本机 aistudio-api 代理 (/api/accounts/sync-cookies)，省去手动导入。",
+  "permissions": ["cookies", "alarms"],
+  "host_permissions": [
+    "https://*.google.com/",
+    "http://localhost:8080/*",
+    "http://127.0.0.1:8080/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "AI Studio Cookie Sync：点击立即同步" }
+}

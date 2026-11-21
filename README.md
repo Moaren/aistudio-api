@@ -257,6 +257,16 @@ docker compose up -d
 4. 将剪贴板中的 Cookie 数据直接粘贴到输入框中，点击 **「确认导入」**；
 5. 系统将自动完成连通性校验，并自动递归探测多登子账号（`u/0`, `u/1`...）完成多身份入库！
 
+### 可选：浏览器扩展自动续 Cookie（免手动重导）
+
+Google 会定期滚动 `__Secure-1PSIDTS` / `SIDCC` 等短效凭据，手动导出的快照过几小时就可能失效。[browser-extension/cookie-sync](./browser-extension/cookie-sync) 是一个 50 行的 Chrome 扩展：浏览器里这些 Cookie 一变化就把当前登录态推到 `POST /api/accounts/sync-cookies`，代理按会话锚点 (SAPISID) 就地覆盖同一浏览器会话下的全部子账号并解除“登录态失效”隔离；匹配不到已有账号时自动走探活导入。
+
+1. 打开 `chrome://extensions`，右上角开启「开发者模式」，点「加载已解压的扩展程序」，选择 `browser-extension/cookie-sync` 目录；
+2. 代理不在本机 8080 或控制台设了 `AISTUDIO_WEB_PASSWORD`，改 `background.js` 顶部的 `ENDPOINT` / `WEB_PASSWORD` 两行后在扩展页点「重新加载」；
+3. 扩展图标角标显示 `OK` 即同步成功，`OFF` 为代理未启动，`OUT` 为浏览器未登录 Google。点图标可立即手动同步。
+
+浏览器持续喂 Cookie 期间，代理不再自行调用 RotateCookies，避免两条滚动链互相挤掉。
+
 ---
 
 ## 第三方客户端配置指引 (NextChat / Cherry Studio / One API 等)
