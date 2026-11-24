@@ -183,6 +183,8 @@ winget install GoLang.Go zig.zig
 
 服务启动后，浏览器访问 **`http://localhost:8080`** 进入管理控制台。
 
+装好之后日常启动双击项目根目录的 **`start-server.cmd`** 即可（等价于步骤 4，出错时窗口会停住显示报错）。
+
 ---
 
 ### Linux / macOS
@@ -257,9 +259,16 @@ docker compose up -d
 4. 将剪贴板中的 Cookie 数据直接粘贴到输入框中，点击 **「确认导入」**；
 5. 系统将自动完成连通性校验，并自动递归探测多登子账号（`u/0`, `u/1`...）完成多身份入库！
 
-### 可选：浏览器扩展自动续 Cookie（免手动重导）
+### 推荐：浏览器扩展自动续 Cookie（免手动重导）
 
-Google 会定期滚动 `__Secure-1PSIDTS` / `SIDCC` 等短效凭据，手动导出的快照过几小时就可能失效。[browser-extension/cookie-sync](./browser-extension/cookie-sync) 是一个 50 行的 Chrome 扩展：浏览器里这些 Cookie 一变化就把当前登录态推到 `POST /api/accounts/sync-cookies`，代理按会话锚点 (SAPISID) 就地覆盖同一浏览器会话下的全部子账号并解除“登录态失效”隔离；匹配不到已有账号时自动走探活导入。
+> [!IMPORTANT]
+> **Cookie 线（8080）长期稳定运行的依赖是两样东西**：`start-server.cmd`（或 `uv run python main.py server`）启动的代理，加上装在 Chrome 里的 `cookie-sync` 扩展，且该 Chrome 保持登录 Google。只导入一次 Cookie 而不装扩展，几小时后就会看到账号被标记「登录态失效」。
+>
+> 原因：Google 会定期滚动 `__Secure-1PSIDTS` / `SIDCC` 等短效凭据。你导出 Cookie 后浏览器仍在滚动自己那份，代理也在用 RotateCookies 滚动自己那份，同一登录会话出现两条互不相认的滚动链，Google 一段时间后会作废代理那条。扩展让代理改为实时复制浏览器的凭据，只保留一条链。
+>
+> 这条线和文首的「用 Chrome 临时聊天页给酒馆接单」（`start-browser-relay.cmd`，8090）是两套独立方案，互不依赖，可只开其一。
+
+手动导出的快照过几小时就可能失效。[browser-extension/cookie-sync](./browser-extension/cookie-sync) 是一个 50 行的 Chrome 扩展：浏览器里这些 Cookie 一变化就把当前登录态推到 `POST /api/accounts/sync-cookies`，代理按会话锚点 (SAPISID) 就地覆盖同一浏览器会话下的全部子账号并解除“登录态失效”隔离；匹配不到已有账号时自动走探活导入。
 
 1. 打开 `chrome://extensions`，右上角开启「开发者模式」，点「加载已解压的扩展程序」，选择 `browser-extension/cookie-sync` 目录；
 2. 代理不在本机 8080 或控制台设了 `AISTUDIO_WEB_PASSWORD`，改 `background.js` 顶部的 `ENDPOINT` / `WEB_PASSWORD` 两行后在扩展页点「重新加载」；
