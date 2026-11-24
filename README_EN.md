@@ -181,6 +181,8 @@ Restart the service upon completion.
 
 Open **`http://localhost:8080`** in your browser to access the Web Console.
 
+For day-to-day use, double-click **`start-server.cmd`** in the project root (same as step 4; the window stays open on error so you can read it).
+
 ---
 
 ### Linux / macOS
