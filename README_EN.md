@@ -255,6 +255,23 @@ This service does not store your Google account password. It uses standard web s
 4. Paste your clipboard data into the input box and click **Confirm Import**;
 5. The service will automatically test connectivity and probe any multi-login sub-accounts (`u/0`, `u/1`...) to register them for load balancing.
 
+### Recommended: Browser Extension for Automatic Cookie Refresh (no manual re-import)
+
+> [!IMPORTANT]
+> **The cookie line (port 8080) needs two things to stay healthy long-term**: the proxy started by `start-server.cmd` (or `uv run python main.py server`), plus the `cookie-sync` extension installed in a Chrome that stays logged in to Google. Importing a cookie once without the extension will get the account flagged "session expired" within hours.
+>
+> Why: Google rotates short-lived credentials such as `__Secure-1PSIDTS` / `SIDCC`. After you export, your browser keeps rotating its copy while the proxy rotates its own via RotateCookies, so one login session ends up with two divergent rotation chains and Google eventually invalidates the proxy's. The extension makes the proxy mirror the browser's credentials in real time, leaving a single chain.
+>
+> This line is independent of the "Chrome temporary chat page relay" described at the top (`start-browser-relay.cmd`, port 8090); run either or both.
+
+[browser-extension/cookie-sync](./browser-extension/cookie-sync) is a ~50-line Chrome extension: whenever those cookies change in the browser it pushes the current login state to `POST /api/accounts/sync-cookies`; the proxy matches existing accounts by session anchor (SAPISID), overwrites cookies for every sub-account of that browser session in place and lifts the "session expired" isolation. If nothing matches it falls back to probe-import.
+
+1. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and pick the `browser-extension/cookie-sync` folder;
+2. If the proxy is not on `localhost:8080` or the console has `AISTUDIO_WEB_PASSWORD` set, edit `ENDPOINT` / `WEB_PASSWORD` at the top of `background.js` and hit **Reload** on the extension card;
+3. The badge shows `OK` on success, `OFF` when the proxy is down, `OUT` when the browser is not logged in to Google. Click the icon to sync immediately.
+
+While the browser keeps feeding cookies the proxy stops calling RotateCookies itself, so the two chains never compete.
+
 ---
 
 ## Third-Party Client Setup Guide (NextChat / Cherry Studio / One API)
